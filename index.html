@@ -2684,7 +2684,7 @@ async function takeFullScreenshot() {
   // 2) Build the offscreen capture stage — always use mobile-sized
   //    column layout regardless of desktop grid, so the full content
   //    renders top-to-bottom without sticky/grid interference.
-  const CAPTURE_WIDTH = 420;
+  const CAPTURE_WIDTH = 460;
   const stage = document.createElement('div');
   stage.style.cssText = `
     position: fixed; left: -99999px; top: 0;
@@ -2702,27 +2702,50 @@ async function takeFullScreenshot() {
   // Strip the .view class so .view/.view.active rules don't apply.
   clone.className = 'screenshot-clone';
 
+  // Remove header action buttons from the clone — they have accent
+  // glows (box-shadow) that render as odd orange blobs in capture.
+  clone.querySelectorAll('.header-actions, .date-picker-btn').forEach(el => el.remove());
+
+  // Strip the ::before radial glow on the hero card by overriding
+  // via inline marker class (handled in override CSS below).
+
   // Inject a scoped style that forces single-column flow, no sticky,
   // no animations, no blur, inside the capture stage only.
+  // IMPORTANT: We do NOT blanket-apply max-height/overflow resets to
+  // every descendant — that would expand collapsed recipes. We only
+  // reset the stage root and the clone root.
   const overrideStyle = document.createElement('style');
   overrideStyle.textContent = `
-    #__screenshotStage, #__screenshotStage * {
+    #__screenshotStage {
       animation: none !important;
       transition: none !important;
-      position: static !important;
-      top: auto !important; bottom: auto !important;
-      left: auto !important; right: auto !important;
       backdrop-filter: none !important;
       -webkit-backdrop-filter: none !important;
       transform: none !important;
-      opacity: 1 !important;
       max-height: none !important;
       overflow: visible !important;
+    }
+    #__screenshotStage * {
+      animation: none !important;
+      transition: none !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      box-shadow: none !important;
+      opacity: 1 !important;
     }
     #__screenshotStage .screenshot-clone {
       display: block !important;
       width: ${CAPTURE_WIDTH}px !important;
       max-width: none !important;
+      position: static !important;
+      opacity: 1 !important;
+      transform: none !important;
+    }
+    #__screenshotStage .large-header {
+      position: static !important;
+      top: auto !important;
+      background: ${getComputedStyle(document.body).backgroundColor} !important;
+      border-bottom: 1px solid var(--border) !important;
     }
     #__screenshotStage .page-content {
       display: flex !important;
@@ -2730,9 +2753,35 @@ async function takeFullScreenshot() {
       grid-template-columns: none !important;
       gap: 14px !important;
       padding: 14px 16px 24px !important;
+      max-width: none !important;
+      margin: 0 !important;
     }
-    #__screenshotStage .large-header {
-      background: ${getComputedStyle(document.body).backgroundColor} !important;
+    #__screenshotStage .hero-card,
+    #__screenshotStage .eaten-card,
+    #__screenshotStage .meal-list {
+      position: static !important;
+      top: auto !important;
+      grid-column: auto !important;
+      grid-row: auto !important;
+      width: auto !important;
+    }
+    /* Kill the radial glow pseudo-element on the hero card */
+    #__screenshotStage .hero-card::before {
+      display: none !important;
+    }
+    /* Ring filter drop-shadow creates a glow that bleeds; keep ring
+       color but drop the filter for cleaner capture */
+    #__screenshotStage .ring-fg {
+      filter: none !important;
+    }
+    /* Preserve collapsed recipe state */
+    #__screenshotStage .recipe-ingredients {
+      max-height: 0 !important;
+      overflow: hidden !important;
+    }
+    #__screenshotStage .recipe-row.open .recipe-ingredients {
+      max-height: 2000px !important;
+      overflow: visible !important;
     }
   `;
 
