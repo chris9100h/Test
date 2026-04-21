@@ -2659,70 +2659,93 @@ async function takeFullScreenshot() {
   `;
   document.body.appendChild(overlay);
 
-  // ─── Capture prep ──────────────────────────────────────────────
-  // On iOS Safari, sticky headers + viewport-locked scrolling confuse
-  // html2canvas. We neutralise sticky/fixed positioning and scroll
-  // to 0 so the browser re-lays out in document flow.
-  const tabbar   = document.querySelector('.tabbar');
-  const tweaks   = document.getElementById('tweaksPanel');
-  const toastEl  = document.getElementById('toast');
-  const header   = activeView.querySelector('.large-header');
+  // ─── Strategy: deep-clone the active view into an offscreen
+  // container where it renders in natural document flow. Canvas
+  // charts need special treatment — we copy their pixel output
+  // onto <img> replacements before cloning.
+  // ───────────────────────────────────────────────────────────
 
-  // Save prev state
-  const prev = {
-    scrollY: window.scrollY,
-    tabbar:  tabbar?.style.cssText || '',
-    tweaks:  tweaks?.style.cssText || '',
-    toast:   toastEl?.style.cssText || '',
-    header:  header?.style.cssText || '',
-    body:    document.body.style.cssText,
-    html:    document.documentElement.style.cssText,
-    overlay: overlay.style.cssText,
-  };
+  // 1) Snapshot all live <canvas> elements in the active view as
+  //    data URLs, keyed by source canvas id.
+  const liveCanvases = activeView.querySelectorAll('canvas');
+  const canvasSnapshots = new Map();
+  liveCanvases.forEach((c, i) => {
+    try {
+      const key = c.id || ('__cx_' + i);
+      if (!c.id) c.setAttribute('data-cx-key', key);
+      else c.setAttribute('data-cx-key', c.id);
+      canvasSnapshots.set(c.getAttribute('data-cx-key'), {
+        url: c.toDataURL('image/png'),
+        w: c.offsetWidth, h: c.offsetHeight,
+      });
+    } catch (e) { console.warn('canvas snapshot failed', e); }
+  });
 
-  // Hide chrome
-  if (tabbar)  tabbar.style.display  = 'none';
-  if (tweaks)  tweaks.style.display  = 'none';
-  if (toastEl) toastEl.style.display = 'none';
+  // 2) Build the offscreen capture stage
+  const viewWidth = Math.min(activeView.getBoundingClientRect().width || 420, window.innerWidth);
+  const stage = document.createElement('div');
+  stage.style.cssText = `
+    position: fixed; left: -99999px; top: 0;
+    width: ${viewWidth}px;
+    background: ${getComputedStyle(document.body).backgroundColor || '#0a0a0b'};
+    z-index: -1; pointer-events: none;
+  `;
 
-  // Neutralise sticky on header — it becomes part of document flow
-  if (header) {
-    header.style.position = 'static';
-    header.style.top = 'auto';
-    header.style.backdropFilter = 'none';
-    header.style.webkitBackdropFilter = 'none';
-    header.style.background = getComputedStyle(document.body).backgroundColor;
+  const clone = activeView.cloneNode(true);
+  // Neutralise sticky on the cloned header + any fixed/absolute chrome
+  const cloneHeader = clone.querySelector('.large-header');
+  if (cloneHeader) {
+    cloneHeader.style.position = 'static';
+    cloneHeader.style.top = 'auto';
+    cloneHeader.style.backdropFilter = 'none';
+    cloneHeader.style.webkitBackdropFilter = 'none';
+    cloneHeader.style.background = getComputedStyle(document.body).backgroundColor;
   }
+  // Force the clone itself out of any display:none/animation state
+  clone.style.display = 'block';
+  clone.style.animation = 'none';
+  clone.style.opacity = '1';
+  clone.style.transform = 'none';
+  clone.style.width = viewWidth + 'px';
+  clone.style.maxWidth = 'none';
 
-  // Remove overflow-hidden + safe-area padding — let the full content expand
-  document.body.style.overflow = 'visible';
-  document.body.style.paddingBottom = '0';
-  document.body.style.minHeight = 'auto';
-  document.documentElement.style.overflow = 'visible';
-  window.scrollTo(0, 0);
+  // 3) Replace every cloned <canvas> with an <img> carrying the
+  //    snapshot — html2canvas can't re-render chart.js canvases.
+  clone.querySelectorAll('canvas').forEach(c => {
+    const key = c.getAttribute('data-cx-key');
+    const snap = key && canvasSnapshots.get(key);
+    if (!snap) return;
+    const img = document.createElement('img');
+    img.src = snap.url;
+    img.style.cssText = `display:block;width:${snap.w}px;height:${snap.h}px`;
+    c.replaceWith(img);
+  });
+
+  stage.appendChild(clone);
+  document.body.appendChild(stage);
 
   // Wait two frames for layout
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  await new Promise(r => setTimeout(r, 80));
+  await new Promise(r => setTimeout(r, 100));
 
-  // Measure — use the view's bounding rect post-reflow
-  const rect = activeView.getBoundingClientRect();
-  const fullWidth  = Math.ceil(Math.max(activeView.scrollWidth,  rect.width,  activeView.offsetWidth));
-  const fullHeight = Math.ceil(Math.max(activeView.scrollHeight, rect.height, activeView.offsetHeight));
+  // Measure the clone's full natural height
+  const fullWidth  = Math.ceil(clone.offsetWidth  || viewWidth);
+  const fullHeight = Math.ceil(clone.scrollHeight || clone.offsetHeight);
 
   try {
     const bg = getComputedStyle(document.body).backgroundColor || '#0a0a0b';
-    const canvas = await html2canvas(activeView, {
+    const canvas = await html2canvas(clone, {
       backgroundColor: bg,
       scale: Math.min(2, window.devicePixelRatio || 1),
       useCORS: true,
+      allowTaint: true,
       logging: false,
       width: fullWidth,
       height: fullHeight,
-      windowWidth: document.documentElement.clientWidth,
-      windowHeight: fullHeight + 200,
+      windowWidth: fullWidth,
+      windowHeight: fullHeight,
       scrollX: 0,
-      scrollY: -window.scrollY,
+      scrollY: 0,
       x: 0,
       y: 0,
       foreignObjectRendering: false,
@@ -2741,14 +2764,10 @@ async function takeFullScreenshot() {
     console.error('Screenshot failed:', err);
     showToast('Fehler: ' + (err.message || err), 'error');
   } finally {
-    // Restore
-    if (tabbar)  tabbar.style.cssText  = prev.tabbar;
-    if (tweaks)  tweaks.style.cssText  = prev.tweaks;
-    if (toastEl) toastEl.style.cssText = prev.toast;
-    if (header)  header.style.cssText  = prev.header;
-    document.body.style.cssText = prev.body;
-    document.documentElement.style.cssText = prev.html;
-    window.scrollTo(0, prev.scrollY);
+    // Clean up: remove the offscreen stage and the loading overlay
+    stage.remove();
+    // Clean up the data-cx-key attrs we added to live canvases
+    liveCanvases.forEach(c => c.removeAttribute('data-cx-key'));
     overlay.remove();
   }
 }
