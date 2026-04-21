@@ -2596,7 +2596,7 @@ async function loadStats() {
       wrapper.style.cssText = 'display:flex;flex-direction:column;gap:2px;width:100%';
       if (i === 0 && offset > 0) wrapper.style.gridColumnStart = offset + 1 + '';
       const cell = document.createElement('div');
-      cell.style.cssText = `border-radius:4px;background:${cellBg(a)};aspect-ratio:1;width:100%`;
+      cell.style.cssText = `border-radius:4px;background:${cellBg(a)};height:20px;width:100%`;
       cell.setAttribute('data-tip', `${d.date}: ${a !== null ? a + '%' : 'N/A'}`);
       cell.className = 'heatmap-cell';
       wrapper.appendChild(cell);
@@ -2610,7 +2610,7 @@ async function loadStats() {
     hm.appendChild(grid);
   }
 
-  document.getElementById('statsContent').style.display = 'block';
+  document.getElementById('statsContent').style.display = 'flex';
   const hmTitle = document.querySelector('#statsHeatmap').previousElementSibling;
   if (avgAdh !== null) {
     hmTitle.innerHTML = `<i class="fas fa-th"></i> Adherence Heatmap <span style="color:${adherenceColor(avgAdh)};margin-left:6px">— Ø ${avgAdh}%</span>`;
@@ -2643,7 +2643,6 @@ async function takeFullScreenshot() {
   const activeView = document.querySelector('.view.active');
   if (!activeView) { showToast('Keine Ansicht aktiv', 'error'); return; }
 
-  // Get label from header title
   const label = (activeView.querySelector('.large-title')?.textContent || 'page').trim();
   const dateStr = new Date().toISOString().slice(0, 10);
   const filename = `fddb-${label.toLowerCase()}-${dateStr}.png`;
@@ -2660,30 +2659,56 @@ async function takeFullScreenshot() {
   `;
   document.body.appendChild(overlay);
 
-  // Temporarily: hide tabbar/tweaks/modals/toast, disable sticky & backdrop-filter so full page renders flat
+  // ─── Capture prep ──────────────────────────────────────────────
+  // On iOS Safari, sticky headers + viewport-locked scrolling confuse
+  // html2canvas. We neutralise sticky/fixed positioning and scroll
+  // to 0 so the browser re-lays out in document flow.
   const tabbar   = document.querySelector('.tabbar');
   const tweaks   = document.getElementById('tweaksPanel');
   const toastEl  = document.getElementById('toast');
   const header   = activeView.querySelector('.large-header');
-  const prevTabbar = tabbar?.style.display;
-  const prevTweaks = tweaks?.style.display;
-  const prevToast  = toastEl?.style.display;
-  const prevHeaderPos = header?.style.position;
-  const prevHeaderBd  = header?.style.backdropFilter;
-  const prevBodyPad   = document.body.style.paddingBottom;
 
-  if (tabbar)  tabbar.style.display = 'none';
-  if (tweaks)  tweaks.style.display = 'none';
+  // Save prev state
+  const prev = {
+    scrollY: window.scrollY,
+    tabbar:  tabbar?.style.cssText || '',
+    tweaks:  tweaks?.style.cssText || '',
+    toast:   toastEl?.style.cssText || '',
+    header:  header?.style.cssText || '',
+    body:    document.body.style.cssText,
+    html:    document.documentElement.style.cssText,
+    overlay: overlay.style.cssText,
+  };
+
+  // Hide chrome
+  if (tabbar)  tabbar.style.display  = 'none';
+  if (tweaks)  tweaks.style.display  = 'none';
   if (toastEl) toastEl.style.display = 'none';
+
+  // Neutralise sticky on header — it becomes part of document flow
   if (header) {
-    header.style.position = 'relative';
+    header.style.position = 'static';
+    header.style.top = 'auto';
     header.style.backdropFilter = 'none';
     header.style.webkitBackdropFilter = 'none';
+    header.style.background = getComputedStyle(document.body).backgroundColor;
   }
-  document.body.style.paddingBottom = '0';
 
-  // Wait a frame for style reflow
+  // Remove overflow-hidden + safe-area padding — let the full content expand
+  document.body.style.overflow = 'visible';
+  document.body.style.paddingBottom = '0';
+  document.body.style.minHeight = 'auto';
+  document.documentElement.style.overflow = 'visible';
+  window.scrollTo(0, 0);
+
+  // Wait two frames for layout
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+  await new Promise(r => setTimeout(r, 80));
+
+  // Measure — use the view's bounding rect post-reflow
+  const rect = activeView.getBoundingClientRect();
+  const fullWidth  = Math.ceil(Math.max(activeView.scrollWidth,  rect.width,  activeView.offsetWidth));
+  const fullHeight = Math.ceil(Math.max(activeView.scrollHeight, rect.height, activeView.offsetHeight));
 
   try {
     const bg = getComputedStyle(document.body).backgroundColor || '#0a0a0b';
@@ -2692,15 +2717,17 @@ async function takeFullScreenshot() {
       scale: Math.min(2, window.devicePixelRatio || 1),
       useCORS: true,
       logging: false,
-      windowWidth: activeView.scrollWidth,
-      windowHeight: activeView.scrollHeight,
-      width: activeView.scrollWidth,
-      height: activeView.scrollHeight,
+      width: fullWidth,
+      height: fullHeight,
+      windowWidth: document.documentElement.clientWidth,
+      windowHeight: fullHeight + 200,
       scrollX: 0,
-      scrollY: 0,
+      scrollY: -window.scrollY,
+      x: 0,
+      y: 0,
+      foreignObjectRendering: false,
     });
 
-    // Download
     canvas.toBlob(blob => {
       if (!blob) { showToast('Screenshot fehlgeschlagen', 'error'); return; }
       const url = URL.createObjectURL(blob);
@@ -2715,15 +2742,13 @@ async function takeFullScreenshot() {
     showToast('Fehler: ' + (err.message || err), 'error');
   } finally {
     // Restore
-    if (tabbar)  tabbar.style.display  = prevTabbar ?? '';
-    if (tweaks)  tweaks.style.display  = prevTweaks ?? '';
-    if (toastEl) toastEl.style.display = prevToast ?? '';
-    if (header) {
-      header.style.position = prevHeaderPos ?? '';
-      header.style.backdropFilter = prevHeaderBd ?? '';
-      header.style.webkitBackdropFilter = '';
-    }
-    document.body.style.paddingBottom = prevBodyPad ?? '';
+    if (tabbar)  tabbar.style.cssText  = prev.tabbar;
+    if (tweaks)  tweaks.style.cssText  = prev.tweaks;
+    if (toastEl) toastEl.style.cssText = prev.toast;
+    if (header)  header.style.cssText  = prev.header;
+    document.body.style.cssText = prev.body;
+    document.documentElement.style.cssText = prev.html;
+    window.scrollTo(0, prev.scrollY);
     overlay.remove();
   }
 }
