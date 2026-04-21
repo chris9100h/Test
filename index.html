@@ -2681,33 +2681,60 @@ async function takeFullScreenshot() {
     } catch (e) { console.warn('canvas snapshot failed', e); }
   });
 
-  // 2) Build the offscreen capture stage
-  const viewWidth = Math.min(activeView.getBoundingClientRect().width || 420, window.innerWidth);
+  // 2) Build the offscreen capture stage — always use mobile-sized
+  //    column layout regardless of desktop grid, so the full content
+  //    renders top-to-bottom without sticky/grid interference.
+  const CAPTURE_WIDTH = 420;
   const stage = document.createElement('div');
   stage.style.cssText = `
     position: fixed; left: -99999px; top: 0;
-    width: ${viewWidth}px;
+    width: ${CAPTURE_WIDTH}px;
     background: ${getComputedStyle(document.body).backgroundColor || '#0a0a0b'};
     z-index: -1; pointer-events: none;
   `;
+  // Tag the stage so our override CSS targets only clones inside it
+  stage.id = '__screenshotStage';
 
   const clone = activeView.cloneNode(true);
-  // Neutralise sticky on the cloned header + any fixed/absolute chrome
-  const cloneHeader = clone.querySelector('.large-header');
-  if (cloneHeader) {
-    cloneHeader.style.position = 'static';
-    cloneHeader.style.top = 'auto';
-    cloneHeader.style.backdropFilter = 'none';
-    cloneHeader.style.webkitBackdropFilter = 'none';
-    cloneHeader.style.background = getComputedStyle(document.body).backgroundColor;
-  }
-  // Force the clone itself out of any display:none/animation state
-  clone.style.display = 'block';
-  clone.style.animation = 'none';
-  clone.style.opacity = '1';
-  clone.style.transform = 'none';
-  clone.style.width = viewWidth + 'px';
-  clone.style.maxWidth = 'none';
+  // Remove IDs from clone subtree to avoid duplicate-ID conflicts
+  // with the live DOM (also neutralises any #id-based CSS selectors).
+  clone.removeAttribute('id');
+  // Strip the .view class so .view/.view.active rules don't apply.
+  clone.className = 'screenshot-clone';
+
+  // Inject a scoped style that forces single-column flow, no sticky,
+  // no animations, no blur, inside the capture stage only.
+  const overrideStyle = document.createElement('style');
+  overrideStyle.textContent = `
+    #__screenshotStage, #__screenshotStage * {
+      animation: none !important;
+      transition: none !important;
+      position: static !important;
+      top: auto !important; bottom: auto !important;
+      left: auto !important; right: auto !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      transform: none !important;
+      opacity: 1 !important;
+      max-height: none !important;
+      overflow: visible !important;
+    }
+    #__screenshotStage .screenshot-clone {
+      display: block !important;
+      width: ${CAPTURE_WIDTH}px !important;
+      max-width: none !important;
+    }
+    #__screenshotStage .page-content {
+      display: flex !important;
+      flex-direction: column !important;
+      grid-template-columns: none !important;
+      gap: 14px !important;
+      padding: 14px 16px 24px !important;
+    }
+    #__screenshotStage .large-header {
+      background: ${getComputedStyle(document.body).backgroundColor} !important;
+    }
+  `;
 
   // 3) Replace every cloned <canvas> with an <img> carrying the
   //    snapshot — html2canvas can't re-render chart.js canvases.
@@ -2722,15 +2749,16 @@ async function takeFullScreenshot() {
   });
 
   stage.appendChild(clone);
+  document.head.appendChild(overrideStyle);
   document.body.appendChild(stage);
 
   // Wait two frames for layout
   await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
-  await new Promise(r => setTimeout(r, 100));
+  await new Promise(r => setTimeout(r, 150));
 
   // Measure the clone's full natural height
-  const fullWidth  = Math.ceil(clone.offsetWidth  || viewWidth);
-  const fullHeight = Math.ceil(clone.scrollHeight || clone.offsetHeight);
+  const fullWidth  = Math.ceil(clone.offsetWidth  || CAPTURE_WIDTH);
+  const fullHeight = Math.ceil(Math.max(clone.scrollHeight, clone.offsetHeight, stage.scrollHeight));
 
   try {
     const bg = getComputedStyle(document.body).backgroundColor || '#0a0a0b';
@@ -2764,9 +2792,9 @@ async function takeFullScreenshot() {
     console.error('Screenshot failed:', err);
     showToast('Fehler: ' + (err.message || err), 'error');
   } finally {
-    // Clean up: remove the offscreen stage and the loading overlay
+    // Clean up: remove the offscreen stage, style override, and overlay
     stage.remove();
-    // Clean up the data-cx-key attrs we added to live canvases
+    overrideStyle.remove();
     liveCanvases.forEach(c => c.removeAttribute('data-cx-key'));
     overlay.remove();
   }
