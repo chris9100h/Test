@@ -1077,8 +1077,8 @@ body[data-hero="bars"] .hero-card-inner { grid-template-columns: 1fr; }
     <header class="large-header">
       <div class="large-header-row">
         <div>
-          <div class="eyebrow">Today</div>
-          <h1 class="large-title">Check</h1>
+          <div class="eyebrow">Daily Intake</div>
+          <h1 class="large-title">Checklist</h1>
         </div>
         <div class="header-actions">
           <button class="pill-btn" onclick="takeFullScreenshot()" title="Screenshot">
@@ -2705,6 +2705,35 @@ async function takeFullScreenshot() {
   // Remove header action buttons from the clone — they have accent
   // glows (box-shadow) that render as odd orange blobs in capture.
   clone.querySelectorAll('.header-actions, .date-picker-btn').forEach(el => el.remove());
+
+  // Replace the date strip with a big, readable date headline for the
+  // currently-active date. Much cleaner in a screenshot than a row
+  // of calendar pills.
+  const dateStrip = clone.querySelector('.date-strip-wrap');
+  if (dateStrip) {
+    const activeDateStr = (typeof currentDate !== 'undefined' && currentDate)
+      ? currentDate
+      : (document.getElementById('dateInput')?.value || new Date().toISOString().slice(0, 10));
+    const d = new Date(activeDateStr + 'T00:00:00');
+    const weekday = d.toLocaleDateString('en-US', { weekday: 'long' });
+    const day     = d.getDate();
+    const month   = d.toLocaleDateString('en-US', { month: 'long' });
+    const year    = d.getFullYear();
+    const bigDate = document.createElement('div');
+    bigDate.style.cssText = `
+      display:flex; align-items:baseline; gap:10px; flex-wrap:wrap;
+      padding: 6px 0 2px;
+      font-family: 'Bebas Neue', sans-serif;
+      letter-spacing: .02em;
+    `;
+    bigDate.innerHTML = `
+      <span style="font-size:2rem;line-height:1;color:var(--accent)">${day}</span>
+      <span style="font-size:1.4rem;line-height:1;color:var(--text)">${month}</span>
+      <span style="font-size:1rem;line-height:1;color:var(--text-dim);letter-spacing:.08em">${year}</span>
+      <span style="font-size:.7rem;letter-spacing:.18em;text-transform:uppercase;color:var(--muted);font-weight:600;font-family:inherit;margin-left:auto">${weekday}</span>
+    `;
+    dateStrip.replaceWith(bigDate);
+  }
 
   // Strip the ::before radial glow on the hero card by overriding
   // via inline marker class (handled in override CSS below).
