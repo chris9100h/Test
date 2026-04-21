@@ -19,6 +19,9 @@
 <!-- Chart -->
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 
+<!-- html2canvas for full-page screenshots -->
+<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+
 <!-- Supabase -->
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 
@@ -1004,15 +1007,45 @@ input[type="range"]::-webkit-slider-thumb {
    DESKTOP (>= 900px): 2-column layout on Today view
    ════════════════════════════════════════════════════════ */
 @media (min-width: 900px) {
+  /* General desktop polish */
+  .app-shell { max-width: 1180px; padding: 0 24px; }
+
+  .large-header { padding: 28px 8px 18px; background: var(--bg); backdrop-filter: none; -webkit-backdrop-filter: none; border-bottom: 1px solid var(--border); }
+  .large-title { font-size: 2.4rem; }
+  .page-content { padding: 22px 8px calc(var(--safe-bot) + 40px); gap: 18px; }
+
+  /* Today: sticky hero + eaten column, meals scroll right */
   #viewMain .page-content {
     display: grid;
-    grid-template-columns: 360px 1fr;
+    grid-template-columns: 380px 1fr;
+    grid-template-rows: auto auto 1fr;
     gap: 18px;
     align-items: start;
   }
-  #viewMain .page-content > .hero-card { grid-column: 1; position: sticky; top: 220px; }
-  #viewMain .page-content > .eaten-card { grid-column: 1; position: sticky; top: 560px; }
-  #viewMain .page-content > .meal-list { grid-column: 2; grid-row: 1 / span 2; }
+  #viewMain .page-content > .hero-card { grid-column: 1; grid-row: 1; position: sticky; top: 130px; }
+  #viewMain .page-content > .eaten-card { grid-column: 1; grid-row: 2; position: sticky; top: 540px; }
+  #viewMain .page-content > .meal-list { grid-column: 2; grid-row: 1 / span 3; }
+
+  /* Stats view: 2-col for summary + charts */
+  #viewStats .page-content { max-width: 980px; margin: 0 auto; width: 100%; }
+  #viewStats .stats-summary-grid { grid-template-columns: repeat(4, 1fr); }
+
+  /* Recipes + More: centered column on desktop */
+  #viewRecipes .page-content,
+  #viewMore .page-content { max-width: 760px; margin: 0 auto; width: 100%; }
+
+  /* Hero card breathes more */
+  .hero-card { padding: 22px; }
+  .hero-ring-wrap { width: 140px; height: 140px; }
+  .hero-ring-val { font-size: 2.6rem; }
+
+  /* Modals centered, comfortable */
+  .modal { max-width: 560px; }
+}
+
+@media (min-width: 1100px) {
+  #viewMain .page-content { grid-template-columns: 420px 1fr; gap: 22px; }
+  #viewMain .page-content > .eaten-card { top: 560px; }
 }
 
 /* Density variants */
@@ -1048,6 +1081,9 @@ body[data-hero="bars"] .hero-card-inner { grid-template-columns: 1fr; }
           <h1 class="large-title">Check</h1>
         </div>
         <div class="header-actions">
+          <button class="pill-btn" onclick="takeFullScreenshot()" title="Screenshot">
+            <i class="fas fa-camera"></i>
+          </button>
           <button class="pill-btn" id="mergeBtn" onclick="toggleMergeServings()" title="Merge Servings">
             <i class="fas fa-layer-group"></i>
           </button>
@@ -1228,6 +1264,14 @@ body[data-hero="bars"] .hero-card-inner { grid-template-columns: 1fr; }
           </div>
           <i class="fas fa-chevron-right list-chev"></i>
         </button>
+        <button class="list-row" onclick="takeFullScreenshot()">
+          <div class="list-icon bg-blue"><i class="fas fa-camera"></i></div>
+          <div class="list-text">
+            <div class="list-label">Screenshot</div>
+            <div class="list-sub">Capture full page as PNG</div>
+          </div>
+          <i class="fas fa-chevron-right list-chev"></i>
+        </button>
         <button class="list-row" onclick="triggerScraper()">
           <div class="list-icon bg-orange"><i class="fas fa-cloud-arrow-down"></i></div>
           <div class="list-text">
@@ -1291,6 +1335,14 @@ body[data-hero="bars"] .hero-card-inner { grid-template-columns: 1fr; }
         <div class="action-tile-text">
           <div class="action-tile-label">New Unit</div>
           <div class="action-tile-sub">Add keyword to strip</div>
+        </div>
+        <i class="fas fa-chevron-right"></i>
+      </button>
+      <button class="action-tile" onclick="closeActionChooser(); takeFullScreenshot()">
+        <div class="action-tile-icon bg-blue"><i class="fas fa-camera"></i></div>
+        <div class="action-tile-text">
+          <div class="action-tile-label">Screenshot</div>
+          <div class="action-tile-sub">Full-page PNG</div>
         </div>
         <i class="fas fa-chevron-right"></i>
       </button>
@@ -2576,6 +2628,104 @@ function showToast(msg, type='') {
   clearTimeout(toastTimer);
   requestAnimationFrame(() => { t.classList.add('show'); });
   toastTimer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+/* ══════════════════════════════════════
+   FULL-PAGE SCREENSHOT
+   Captures the active view at its FULL
+   scroll height — not just the viewport.
+   ══════════════════════════════════════ */
+async function takeFullScreenshot() {
+  if (typeof html2canvas === 'undefined') {
+    showToast('Screenshot-Lib lädt noch…', 'error');
+    return;
+  }
+  const activeView = document.querySelector('.view.active');
+  if (!activeView) { showToast('Keine Ansicht aktiv', 'error'); return; }
+
+  // Get label from header title
+  const label = (activeView.querySelector('.large-title')?.textContent || 'page').trim();
+  const dateStr = new Date().toISOString().slice(0, 10);
+  const filename = `fddb-${label.toLowerCase()}-${dateStr}.png`;
+
+  // Overlay during capture
+  const overlay = document.createElement('div');
+  overlay.style.cssText = `position:fixed;inset:0;background:rgba(0,0,0,.8);z-index:9999;
+    display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;
+    color:#fff;font-family:inherit;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)`;
+  overlay.innerHTML = `
+    <div style="width:48px;height:48px;border:3px solid rgba(255,255,255,.2);border-top-color:var(--accent);border-radius:50%;animation:spin 1s linear infinite"></div>
+    <div style="font-size:.9rem;color:#fff">Screenshot wird erstellt…</div>
+    <div style="font-size:.7rem;color:rgba(255,255,255,.5);letter-spacing:.08em;text-transform:uppercase">bitte kurz warten</div>
+  `;
+  document.body.appendChild(overlay);
+
+  // Temporarily: hide tabbar/tweaks/modals/toast, disable sticky & backdrop-filter so full page renders flat
+  const tabbar   = document.querySelector('.tabbar');
+  const tweaks   = document.getElementById('tweaksPanel');
+  const toastEl  = document.getElementById('toast');
+  const header   = activeView.querySelector('.large-header');
+  const prevTabbar = tabbar?.style.display;
+  const prevTweaks = tweaks?.style.display;
+  const prevToast  = toastEl?.style.display;
+  const prevHeaderPos = header?.style.position;
+  const prevHeaderBd  = header?.style.backdropFilter;
+  const prevBodyPad   = document.body.style.paddingBottom;
+
+  if (tabbar)  tabbar.style.display = 'none';
+  if (tweaks)  tweaks.style.display = 'none';
+  if (toastEl) toastEl.style.display = 'none';
+  if (header) {
+    header.style.position = 'relative';
+    header.style.backdropFilter = 'none';
+    header.style.webkitBackdropFilter = 'none';
+  }
+  document.body.style.paddingBottom = '0';
+
+  // Wait a frame for style reflow
+  await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+
+  try {
+    const bg = getComputedStyle(document.body).backgroundColor || '#0a0a0b';
+    const canvas = await html2canvas(activeView, {
+      backgroundColor: bg,
+      scale: Math.min(2, window.devicePixelRatio || 1),
+      useCORS: true,
+      logging: false,
+      windowWidth: activeView.scrollWidth,
+      windowHeight: activeView.scrollHeight,
+      width: activeView.scrollWidth,
+      height: activeView.scrollHeight,
+      scrollX: 0,
+      scrollY: 0,
+    });
+
+    // Download
+    canvas.toBlob(blob => {
+      if (!blob) { showToast('Screenshot fehlgeschlagen', 'error'); return; }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      showToast('Screenshot gespeichert: ' + filename, 'success');
+    }, 'image/png');
+  } catch (err) {
+    console.error('Screenshot failed:', err);
+    showToast('Fehler: ' + (err.message || err), 'error');
+  } finally {
+    // Restore
+    if (tabbar)  tabbar.style.display  = prevTabbar ?? '';
+    if (tweaks)  tweaks.style.display  = prevTweaks ?? '';
+    if (toastEl) toastEl.style.display = prevToast ?? '';
+    if (header) {
+      header.style.position = prevHeaderPos ?? '';
+      header.style.backdropFilter = prevHeaderBd ?? '';
+      header.style.webkitBackdropFilter = '';
+    }
+    document.body.style.paddingBottom = prevBodyPad ?? '';
+    overlay.remove();
+  }
 }
 
 /* ══════════════════════════════════════
